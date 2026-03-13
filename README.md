@@ -1,197 +1,197 @@
 # ollama-farm
 
-**Un unico endpoint HTTP per più nodi Ollama.** Un server pubblico riceve le richieste API Ollama e le instrada, via WebSocket, ai client con GPU collegati. I chiamanti vedono un solo “Ollama” mentre il carico viene distribuito in round-robin sui nodi liberi.
+**A single HTTP endpoint for multiple Ollama nodes.** A public server receives Ollama API requests and routes them over WebSocket to connected GPU clients. Callers see one “Ollama” while load is distributed round-robin across free nodes.
 
 ---
 
-## Indice
+## Table of contents
 
-- [Come funziona](#come-funziona)
-- [Requisiti](#requisiti)
-- [Installazione](#installazione)
-- [Uso: Server](#uso-server)
-- [Uso: Client](#uso-client)
-- [Esempi completi](#esempi-completi)
-- [Protocollo](#protocollo)
-- [Limitazioni](#limitazioni)
-- [Sviluppo](#sviluppo)
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage: Server](#usage-server)
+- [Usage: Client](#usage-client)
+- [Full examples](#full-examples)
+- [Protocol](#protocol)
+- [Limitations](#limitations)
+- [Development](#development)
 
 ---
 
-## Come funziona
+## How it works
 
 ```
-CHIAMANTE ──HTTP──▶ SERVER ──WebSocket (persistente)──▶ CLIENT(1..N)
-  (curl, app)         :8080                                   │
-                       │                                      ▼
-                       │                               Ollama :11434
+CALLER ──HTTP──▶ SERVER ──WebSocket (persistent)──▶ CLIENT(1..N)
+  (curl, app)      :8080                                  │
+                       │                                  ▼
+                       │                           Ollama :11434
                        │
-                       └── TUI (dashboard in terminale)
+                       └── TUI (terminal dashboard)
 ```
 
-- **Server** (`ollama-farm server`): ascolta su HTTP (es. `:8080`), espone le stesse API di Ollama (`/api/generate`, `/api/chat`, `/api/tags`, ecc.) e mantiene un registro dei client connessi via WebSocket. Per ogni richiesta estrae il campo `model` dal body JSON, sceglie un client **libero** che ha quel modello (round-robin se ce ne sono più di uno), invia la richiesta sul tunnel WebSocket e inoltra lo stream di risposta al chiamante.
+- **Server** (`ollama-farm server`): listens on HTTP (e.g. `:8080`), exposes the same APIs as Ollama (`/api/generate`, `/api/chat`, `/api/tags`, etc.) and keeps a registry of clients connected via WebSocket. For each request it reads the `model` field from the JSON body, picks a **free** client that has that model (round-robin when several are available), sends the request over the WebSocket tunnel and streams the response back to the caller.
 
-- **Client** (`ollama-farm client`): si connette **in uscita** al server (nessuna porta da aprire, funziona dietro NAT/firewall). All’avvio interroga l’Ollama locale (`/api/tags`) per ottenere la lista dei modelli, si registra sul server con token + modelli e resta in attesa. Quando arriva una richiesta dal server, la inoltra a Ollama locale e rimanda indietro chunk, end o error.
+- **Client** (`ollama-farm client`): connects **outbound** to the server (no open ports, works behind NAT/firewalls). On startup it queries local Ollama (`/api/tags`) for the model list, registers with the server (token + models) and waits. When a request arrives from the server, it forwards it to local Ollama and sends back chunk, end or error messages.
 
-- **TUI**: il server mostra una dashboard (BubbleTea) con porta, token e lista client (FREE/BUSY, modelli, richieste totali), più il comando per installare nuovi client.
+- **TUI**: the server shows a dashboard (BubbleTea) with port, token and client list (FREE/BUSY, models, total requests), plus the command to install new clients.
 
-**Flusso di una richiesta**
+**Request flow**
 
-1. Il chiamante invia `POST /api/generate` (o altra API Ollama) al server.
-2. Il server bufferizza il body (max 10 MB; oltre → 413), legge `model` dal JSON.
-3. Il router sceglie un client FREE con quel modello (round-robin).
-4. Il server invia un messaggio `REQUEST` (method, path, headers, body in base64) sul WebSocket del client e lo marca BUSY.
-5. Il client decodifica il body, fa la richiesta a Ollama locale e invia ogni chunk di risposta come messaggio `CHUNK`.
-6. Il server inoltra i chunk al chiamante HTTP (streaming).
-7. A fine stream il client invia `END`; il server marca il client FREE. In caso di errore invia `ERROR` e il server risponde 502 al chiamante.
+1. The caller sends `POST /api/generate` (or another Ollama API) to the server.
+2. The server buffers the body (max 10 MB; 413 if larger), reads `model` from the JSON.
+3. The router selects a FREE client with that model (round-robin).
+4. The server sends a `REQUEST` message (method, path, headers, body in base64) on the client’s WebSocket and marks the client BUSY.
+5. The client decodes the body, issues the request to local Ollama and sends each response chunk as a `CHUNK` message.
+6. The server forwards chunks to the HTTP caller (streaming).
+7. When the stream ends the client sends `END`; the server marks the client FREE. On error it sends `ERROR` and the server returns 502 to the caller.
 
-Ogni client gestisce **una richiesta alla volta** (nessun pipelining), in linea con il modello di Ollama.
+Each client handles **one request at a time** (no pipelining), consistent with Ollama’s model.
 
 ---
 
-## Requisiti
+## Requirements
 
-- **Server**: Go 1.22+ (o binario precompilato). Nessun Ollama sul server.
-- **Client**: Go 1.22+ (o binario) e **Ollama in esecuzione** sulla stessa macchina (default `http://localhost:11434`).
-- Rete: i client devono poter raggiungere il server (WebSocket); il server deve essere raggiungibile dai chiamanti (HTTP).
+- **Server**: Go 1.22+ (or a prebuilt binary). No Ollama on the server.
+- **Client**: Go 1.22+ (or binary) and **Ollama running** on the same machine (default `http://localhost:11434`).
+- Network: clients must be able to reach the server (WebSocket); the server must be reachable by callers (HTTP).
 
 ---
 
-## Installazione
+## Installation
 
-### Su un client: un comando (dal tuo server)
+### On a client: one command (from your server)
 
-Se hai già un server ollama-farm in esecuzione, su ogni macchina client puoi usare **un solo comando** per scaricare il binario dal server e avviare il client (sostituisci `TUO_SERVER` con l’indirizzo del server, es. `farm.example.com:8080`, e `TUO_TOKEN` con il token mostrato dalla TUI):
-
-```bash
-curl -fsSL https://TUO_SERVER/install.sh | sh -s -- --token TUO_TOKEN
-```
-
-Lo script è servito dal server stesso: scarica il binario da `/download/` (proxy alle release GitHub), installa in `/usr/local/bin` e avvia subito `ollama-farm client` verso quel server. Con **http** se il server non usa TLS:
+If you already have an ollama-farm server running, on each client machine you can use **one command** to download the binary from the server and start the client (replace `YOUR_SERVER` with the server address, e.g. `farm.example.com:8080`, and `YOUR_TOKEN` with the token shown in the TUI):
 
 ```bash
-curl -fsSL http://TUO_SERVER/install.sh | sh -s -- --token TUO_TOKEN
+curl -fsSL https://YOUR_SERVER/install.sh | sh -s -- --token YOUR_TOKEN
 ```
 
-### Da release (senza server)
+The script is served by the server: it downloads the binary from `/download/` (proxy to GitHub releases), installs to `/usr/local/bin` and immediately runs `ollama-farm client` against that server. Use **http** if the server does not use TLS:
 
-Per installare solo il binario (es. sul server o per uso locale):
+```bash
+curl -fsSL http://YOUR_SERVER/install.sh | sh -s -- --token YOUR_TOKEN
+```
+
+### From release (without a server)
+
+To install only the binary (e.g. on the server or for local use):
 
 ```bash
 curl -fsSL https://get.ollama-farm.io | sh
 ```
 
-(Reindirizza allo script su GitHub.) Oppure:
+(Redirects to the script on GitHub.) Or:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/danielecalderazzo/ollama-farm/main/scripts/install.sh | sh
 ```
 
-Rileva OS (Linux/macOS) e arch (amd64/arm64), scarica l’ultima release e installa in `/usr/local/bin`.
+Detects OS (Linux/macOS) and arch (amd64/arm64), downloads the latest release and installs to `/usr/local/bin`.
 
-### Da sorgente
+### From source
 
 ```bash
 git clone https://github.com/danielecalderazzo/ollama-farm.git
 cd ollama-farm
 go build -o ollama-farm .
-# opzionale: mv ollama-farm /usr/local/bin/
+# optional: mv ollama-farm /usr/local/bin/
 ```
 
 ---
 
-## Uso: Server
+## Usage: Server
 
 ```bash
 ollama-farm server [flags]
 ```
 
-| Flag        | Default | Descrizione |
+| Flag        | Default | Description |
 |------------|---------|-------------|
-| `--port`   | 8080    | Porta HTTP (es. `8080` → `:8080`) |
-| `--token`  | (vuoto) | Token di autenticazione per i client. Se omesso, viene generato e salvato in `~/.ollama-farm/config.json` (riusato ai prossimi avvii). |
-| `--host`   | (vuoto) | Host pubblico (es. `farm.example.com`) per la TUI: il comando di install mostrato userà questo indirizzo, pronto da copiare. |
-| `--releases-dir` | (vuoto) | Cartella con binari precompilati (`ollama-farm_<os>_<arch>.tar.gz` o `.zip`). Se GitHub non ha release (404), il server serve i file da qui. Utile prima della prima release o in rete isolata. |
-| `--no-tui` | false   | Avvia solo l’HTTP server senza dashboard (utile in background o senza TTY, es. `systemd` o script). |
-| `--tls-cert` | (vuoto) | Path al certificato TLS (HTTPS). |
-| `--tls-key`  | (vuoto) | Path alla chiave TLS. |
+| `--port`   | 8080    | HTTP listen port (e.g. `8080` → `:8080`) |
+| `--token`  | (empty) | Auth token for clients. If omitted, one is generated and saved to `~/.ollama-farm/config.json` (reused on next runs). |
+| `--host`   | (empty) | Public host (e.g. `farm.example.com`) for the TUI: the install command shown will use this address, ready to copy. |
+| `--releases-dir` | (empty) | Folder with prebuilt binaries (`ollama-farm_<os>_<arch>.tar.gz` or `.zip`). If GitHub has no release (404), the server serves files from here. Useful before the first release or on an isolated network. |
+| `--no-tui` | false   | Run HTTP server only, no dashboard (for background or headless, e.g. systemd or scripts). |
+| `--tls-cert` | (empty) | Path to TLS certificate (HTTPS). |
+| `--tls-key`  | (empty) | Path to TLS key. |
 
-Il server espone **risorse di installazione**: `GET /install.sh` e `GET /install.ps1` servono script che scaricano il binario da `GET /download/<file>`. Di default il download è in proxy alle release GitHub; se non esiste ancora una release (404), puoi avviare il server con **`--releases-dir ./releases`** e mettere in `./releases` i file (es. `ollama-farm_windows_amd64.zip`). La TUI mostra il comando unico da eseguire sui client.
+The server exposes **install assets**: `GET /install.sh` and `GET /install.ps1` serve scripts that download the binary from `GET /download/<file>`. By default the download is proxied to GitHub releases; if there is no release yet (404), you can start the server with **`--releases-dir ./releases`** and put files there (e.g. `ollama-farm_windows_amd64.zip`). The TUI shows the one-command install for clients.
 
-**Esempi**
+**Examples**
 
 ```bash
-# Porta 8080, token generato e persistito
+# Port 8080, token generated and persisted
 ollama-farm server
 
-# Porta 9000, token fissato
+# Port 9000, fixed token
 ollama-farm server --port 9000 --token "my-secret-token"
 
-# In background (senza TUI, stampa token su stderr)
+# Background (no TUI, prints token to stderr)
 ollama-farm server --port 8080 --token "my-token" --no-tui
 
-# Con host pubblico (la TUI mostrerà il comando di install già con questo indirizzo)
+# With public host (TUI will show the install command with this address)
 ollama-farm server --port 8080 --host farm.example.com
 
-# Senza release su GitHub: servi i binari da una cartella locale (es. dopo go build + zip manuale)
-mkdir -p releases && cp ollama-farm_windows_amd64.zip releases/  # poi:
+# No GitHub release yet: serve binaries from a local folder (e.g. after go build + manual zip)
+mkdir -p releases && cp ollama-farm_windows_amd64.zip releases/  # then:
 ollama-farm server --port 8080 --releases-dir ./releases
 
 # HTTPS
 ollama-farm server --port 443 --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
 ```
 
-All’avvio parte la **TUI**: vedi porta, token e lista client. Il comando “INSTALL NEW CLIENT” usa l’indirizzo di questo server (`/install.sh` e `/download/` sono serviti dal server). Il token mostrato va passato a ogni client. Per uscire: un tasto qualsiasi (es. q) o SIGINT/SIGTERM.
+On startup the **TUI** runs: you see port, token and client list. The “INSTALL NEW CLIENT” command uses this server’s address (`/install.sh` and `/download/` are served by the server). Pass the shown token to every client. To exit: any key (e.g. q) or SIGINT/SIGTERM.
 
 ---
 
-## Uso: Client
+## Usage: Client
 
 ```bash
-ollama-farm client --server <URL_WS> --token <TOKEN> [flags]
+ollama-farm client --server <WS_URL> --token <TOKEN> [flags]
 ```
 
-| Flag          | Default              | Descrizione |
+| Flag          | Default              | Description |
 |---------------|----------------------|-------------|
-| `--server`    | (obbligatorio)       | URL WebSocket del server (es. `ws://host:8080` o `wss://host:443`). Il client aggiunge `/ws` se manca. |
-| `--token`     | (obbligatorio)       | Stesso token configurato sul server. |
-| `--ollama-url`| http://localhost:11434 | URL dell’istanza Ollama locale. |
+| `--server`    | (required)           | WebSocket URL of the server (e.g. `ws://host:8080` or `wss://host:443`). The client adds `/ws` if missing. |
+| `--token`     | (required)           | Same token configured on the server. |
+| `--ollama-url`| http://localhost:11434 | URL of the local Ollama instance. |
 
-**Esempi**
+**Examples**
 
 ```bash
-# Server in locale, porta 8080
+# Local server, port 8080
 ollama-farm client --server ws://localhost:8080 --token "my-secret-token"
 
-# Server remoto in HTTPS
+# Remote server over HTTPS
 ollama-farm client --server wss://farm.example.com --token "my-secret-token"
 
-# Ollama su altra porta
+# Ollama on a different port
 ollama-farm client --server ws://localhost:8080 --token "my-secret-token" --ollama-url http://localhost:11435
 ```
 
-Il client si connette, scopre i modelli da Ollama (`/api/tags`), si registra e resta in attesa. In caso di disconnessione riprova con backoff esponenziale (max 30 s). Se il server chiude con codice 4001 (token errato), il client non riprova. Per fermare: Ctrl+C (o SIGTERM).
+The client connects, discovers models from Ollama (`/api/tags`), registers and waits. On disconnect it retries with exponential backoff (max 30 s). If the server closes with code 4001 (wrong token), the client does not retry. To stop: Ctrl+C (or SIGTERM).
 
 ---
 
-## Esempi completi
+## Full examples
 
-### 1. Server + un client sulla stessa macchina
+### 1. Server and one client on the same machine
 
-**Terminale 1 – Server**
+**Terminal 1 – Server**
 
 ```bash
 ollama-farm server --port 8080
-# Annota il token mostrato in TUI, es. abc123def456
+# Note the token shown in the TUI, e.g. abc123def456
 ```
 
-**Terminale 2 – Client** (Ollama deve essere avviato, es. `ollama serve`)
+**Terminal 2 – Client** (Ollama must be running, e.g. `ollama serve`)
 
 ```bash
 ollama-farm client --server ws://localhost:8080 --token "abc123def456"
 ```
 
-**Terminale 3 – Chiamata**
+**Terminal 3 – Request**
 
 ```bash
 curl -s http://localhost:8080/api/generate \
@@ -199,67 +199,67 @@ curl -s http://localhost:8080/api/generate \
   -d '{"model":"llama3","prompt":"Say hello in one word","stream":false}'
 ```
 
-La TUI del server mostrerà il client prima FREE, poi BUSY durante la richiesta, poi di nuovo FREE.
+The server TUI will show the client as FREE, then BUSY during the request, then FREE again.
 
-### 2. Aggiungere un client con un solo comando
+### 2. Add a client with one command
 
-Sul server (es. `farm.example.com:8080`) è in esecuzione `ollama-farm server` e in TUI vedi il token. Su una **nuova macchina** (con Ollama installato) esegui:
+The server (e.g. `farm.example.com:8080`) is running `ollama-farm server` and you see the token in the TUI. On a **new machine** (with Ollama installed) run:
 
 ```bash
-curl -fsSL https://farm.example.com:8080/install.sh | sh -s -- --token IL_TUO_TOKEN
+curl -fsSL https://farm.example.com:8080/install.sh | sh -s -- --token YOUR_TOKEN
 ```
 
-Scarica il binario da quel server, lo installa e avvia il client verso il server. Se il server non usa HTTPS, usa `http://` nell’URL.
+This downloads the binary from that server, installs it and starts the client. If the server does not use HTTPS, use `http://` in the URL.
 
-### 3. Più client (round-robin)
+### 3. Multiple clients (round-robin)
 
-Avvia il server una volta, poi più client (anche su macchine diverse) con lo stesso token. Le richieste per un dato modello verranno distribuite in round-robin tra i client liberi che hanno quel modello.
+Start the server once, then run multiple clients (on different machines if you like) with the same token. Requests for a given model are distributed round-robin across free clients that have that model.
 
-### 4. Verificare i modelli disponibili
+### 4. List available models
 
 ```bash
 curl -s http://localhost:8080/api/tags
 ```
 
-Il server inoltra la richiesta a un client che ha risposto a `/api/tags`; i modelli sono l’unione di quelli dichiarati dai client connessi.
+The server forwards the request to a client that responded to `/api/tags`; models are the union of those declared by connected clients.
 
 ---
 
-## Protocollo
+## Protocol
 
-I messaggi WebSocket sono JSON con un campo `type`. Direzione: client→server o server→client.
+WebSocket messages are JSON with a `type` field. Direction: client→server or server→client.
 
-| Tipo       | Direzione      | Contenuto |
-|------------|----------------|-----------|
-| `register` | client → server | `token`, `models[]` — registrazione dopo l’upgrade WS. |
-| `request`  | server → client | `req_id`, `method`, `path`, `headers`, `body_b64` — richiesta HTTP da inoltrare a Ollama. |
-| `chunk`    | client → server | `req_id`, `data` (base64), `status_code` (solo nel primo chunk). |
-| `end`      | client → server | `req_id` — fine stream; il server marca il client FREE. |
-| `error`    | client → server | `req_id`, `message`, `code` — errore; il server risponde 502 e marca FREE. |
+| Type       | Direction      | Content |
+|------------|----------------|--------|
+| `register` | client → server | `token`, `models[]` — registration after WS upgrade. |
+| `request`  | server → client | `req_id`, `method`, `path`, `headers`, `body_b64` — HTTP request to forward to Ollama. |
+| `chunk`    | client → server | `req_id`, `data` (base64), `status_code` (first chunk only). |
+| `end`      | client → server | `req_id` — end of stream; server marks client FREE. |
+| `error`    | client → server | `req_id`, `message`, `code` — error; server returns 502 and marks FREE. |
 
-Dopo l’upgrade WebSocket il server attende un messaggio `register` entro **5 secondi**; se il token non corrisponde chiude con codice 4001 (unauthorized). Ping/pong mantengono la connessione viva.
-
----
-
-## Limitazioni
-
-- **Body massimo**: 10 MB per richiesta (oltre → 413).
-- **Modelli per client**: la lista inviata alla registrazione è quella usata per tutta la connessione. Se aggiungi/rimuovi modelli su Ollama, riavvia il client per aggiornare la lista.
-- **Un request per client**: un client alla volta gestisce una sola richiesta; non c’è pipelining.
-- **Nessun persist**: il registro client è in memoria; allo stop del server tutti i client devono riconnettersi.
+After the WebSocket upgrade the server waits for a `register` message within **5 seconds**; if the token does not match it closes with code 4001 (unauthorized). Ping/pong keep the connection alive.
 
 ---
 
-## Sviluppo
+## Limitations
 
-**Build e test**
+- **Max body size**: 10 MB per request (413 if larger).
+- **Models per client**: the list sent at registration is used for the whole connection. If you add/remove models in Ollama, restart the client to refresh the list.
+- **One request per client**: each client handles a single request at a time; no pipelining.
+- **No persistence**: the client registry is in memory; when the server stops, all clients must reconnect.
+
+---
+
+## Development
+
+**Build and test**
 
 ```bash
 go build -o ollama-farm .
 go test ./... -v -timeout 60s
 ```
 
-**Test di integrazione (fake Ollama)**
+**Integration tests (fake Ollama)**
 
 ```bash
 go test ./tests/... -v -tags integration -timeout 30s
@@ -267,10 +267,10 @@ go test ./tests/... -v -tags integration -timeout 30s
 
 **Release (GoReleaser)**
 
-Il push di un tag `v*` attiva la workflow GitHub che costruisce gli artefatti per Linux, macOS e Windows (amd64/arm64). Configurazione in `.goreleaser.yaml`.
+Pushing a `v*` tag triggers the GitHub workflow that builds artifacts for Linux, macOS and Windows (amd64/arm64). Config in `.goreleaser.yaml`.
 
 ---
 
-## Licenza
+## License
 
-Vedi [LICENSE](LICENSE) nel repository.
+See [LICENSE](LICENSE) in the repository.

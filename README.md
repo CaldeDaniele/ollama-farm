@@ -2,6 +2,23 @@
 
 **A single HTTP endpoint for multiple Ollama nodes.** A public server receives Ollama API requests and routes them over WebSocket to connected GPU clients. Callers see one “Ollama” while load is distributed round-robin across free nodes.
 
+### Ready-to-use Docker image (plug and play)
+
+Run the server with one command (no install, no Go required):
+
+```bash
+docker run -d -p 8080:8080 --name ollama-farm danielecalderazzo/ollama-farm:latest
+```
+
+Optional: set a fixed token and port via args:
+
+```bash
+docker run -d -p 9000:9000 --name ollama-farm \
+  danielecalderazzo/ollama-farm:latest --port 9000 --token "your-secret-token"
+```
+
+Image on Docker Hub: **[danielecalderazzo/ollama-farm](https://hub.docker.com/r/danielecalderazzo/ollama-farm)**.
+
 ---
 
 ## Table of contents

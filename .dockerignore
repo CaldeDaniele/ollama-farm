@@ -1,0 +1,30 @@
+# Git and docs
+.git
+.gitignore
+*.md
+docs/
+scripts/
+
+# Build artifacts and binaries
+ollama-farm
+ollama-farm.exe
+/dist/
+/releases/
+*.zip
+*.tar.gz
+
+# Tests and tooling
+tests/
+*.test
+coverage.html
+.cursor
+.claude
+.superpowers
+
+# IDE and OS
+.idea
+.vscode
+.DS_Store
+
+# Local config (not needed in image)
+.ollama-farm

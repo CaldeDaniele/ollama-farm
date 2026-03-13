@@ -1,0 +1,45 @@
+# Binaries
+ollama-farm
+ollama-farm.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build output
+/dist/
+/releases/
+*.zip
+*.tar.gz
+
+# Go
+/vendor/
+*.test
+*.out
+coverage.html
+go.work
+go.work.sum
+
+# IDE and tools
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project-specific (do not publish)
+.claude/
+.superpowers/
+
+# Local config (optional: token etc.)
+# .ollama-farm/
+
+# Debug and temp
+*.log
+*.tmp
+/tmp/
+.cache/

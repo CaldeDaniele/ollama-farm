@@ -56,7 +56,7 @@ CHIAMANTE ──HTTP──▶ SERVER ──WebSocket (persistente)──▶ CLIE
 
 1. Il chiamante invia `POST /api/generate` (o altra API Ollama) al server.
 2. Il server bufferizza il body (max 10 MB; oltre → 413), legge `model` dal JSON.
-3. Il router sceglie un client FREE con quel modello (round-robin).
+3. Il router sceglie un client FREE con quel modello (round-robin). Se tutti sono occupati, la richiesta **resta in coda** finché non si libera un worker (o non arriva un client con quel modello).
 4. Il server invia un messaggio `REQUEST` (method, path, headers, body in base64) sul WebSocket del client e lo marca BUSY.
 5. Il client decodifica il body, fa la richiesta a Ollama locale e invia ogni chunk di risposta come messaggio `CHUNK`.
 6. Il server inoltra i chunk al chiamante HTTP (streaming).

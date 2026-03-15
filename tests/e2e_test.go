@@ -87,13 +87,16 @@ func TestE2E_RequestRoutedToClient(t *testing.T) {
 	assert.Contains(t, string(respBody), "hello")
 }
 
-func TestE2E_503_WhenNoClient(t *testing.T) {
+func TestE2E_WaitTimeout_WhenNoClient(t *testing.T) {
 	reg := server.NewRegistry()
 	h := server.NewHTTPHandler(reg, server.NewRouter(reg), server.NewDispatcher(reg), "tok")
 
 	body := `{"model":"llama3","prompt":"hi"}`
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
 	req := httptest.NewRequest(http.MethodPost, "/api/generate", strings.NewReader(body))
+	req = req.WithContext(ctx)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assert.Equal(t, http.StatusRequestTimeout, w.Code)
 }

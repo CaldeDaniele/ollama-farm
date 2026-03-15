@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -58,10 +59,15 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("could not determine model: %v", extractErr), http.StatusBadRequest)
 		return
 	}
+	ctx := r.Context()
 	if extractErr == nil && model != "" {
 		var pickErr error
-		clientID, pickErr = h.router.Pick(model)
+		clientID, pickErr = h.router.PickWait(ctx, model)
 		if pickErr != nil {
+			if pickErr == context.Canceled || pickErr == context.DeadlineExceeded {
+				http.Error(w, pickErr.Error(), http.StatusRequestTimeout)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{
@@ -71,8 +77,12 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	} else if anyClientPaths[path] {
 		var pickErr error
-		clientID, pickErr = h.router.PickAny()
+		clientID, pickErr = h.router.PickAnyWait(ctx)
 		if pickErr != nil {
+			if pickErr == context.Canceled || pickErr == context.DeadlineExceeded {
+				http.Error(w, pickErr.Error(), http.StatusRequestTimeout)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{

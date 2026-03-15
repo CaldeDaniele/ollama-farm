@@ -1,7 +1,9 @@
 package server_test
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/danielecalderazzo/ollama-farm/internal/server"
 	"github.com/stretchr/testify/assert"
@@ -69,4 +71,23 @@ func TestRouter_WrongModelSkipped(t *testing.T) {
 	_, err := router.Pick("llama3")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, server.ErrNoClientAvailable)
+}
+
+func TestRouter_PickWait_UnblocksWhenClientFrees(t *testing.T) {
+	r := makeRegistry(&server.ClientEntry{ID: "c1", Models: []string{"llama3"}, Status: server.StatusBusy})
+	router := server.NewRouter(r)
+	ctx := context.Background()
+
+	done := make(chan string, 1)
+	go func() {
+		id, err := router.PickWait(ctx, "llama3")
+		if err != nil {
+			done <- ""
+			return
+		}
+		done <- id
+	}()
+	time.Sleep(30 * time.Millisecond)
+	r.SetStatus("c1", server.StatusFree, "")
+	assert.Equal(t, "c1", <-done)
 }

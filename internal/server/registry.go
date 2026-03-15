@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -37,20 +38,31 @@ func (e *ClientEntry) HasModel(model string) bool {
 
 // Registry is a thread-safe map of connected clients.
 type Registry struct {
-	mu      sync.RWMutex
-	clients map[string]*ClientEntry
+	mu       sync.RWMutex
+	clients  map[string]*ClientEntry
+	pickWait sync.Mutex
+	pickCond *sync.Cond // Broadcast when a client becomes FREE or is added (queue waiters)
 }
 
 // NewRegistry creates an empty Registry.
 func NewRegistry() *Registry {
-	return &Registry{clients: make(map[string]*ClientEntry)}
+	reg := &Registry{clients: make(map[string]*ClientEntry)}
+	reg.pickCond = sync.NewCond(&reg.pickWait)
+	return reg
+}
+
+func (r *Registry) signalPickWaiters() {
+	r.pickWait.Lock()
+	r.pickCond.Broadcast()
+	r.pickWait.Unlock()
 }
 
 // Add inserts a new client entry. Overwrites if the ID already exists.
 func (r *Registry) Add(e *ClientEntry) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	r.clients[e.ID] = e
+	r.mu.Unlock()
+	r.signalPickWaiters()
 }
 
 // Remove deletes a client by ID.
@@ -75,11 +87,37 @@ func (r *Registry) Get(id string) (*ClientEntry, bool) {
 // SetStatus updates the status and active request ID for a client.
 func (r *Registry) SetStatus(id string, status ClientStatus, reqID string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if e, ok := r.clients[id]; ok {
 		e.Status = status
 		e.ActiveReqID = reqID
 	}
+	r.mu.Unlock()
+	if status == StatusFree {
+		r.signalPickWaiters()
+	}
+}
+
+// WaitForPickCapacity blocks until signalPickWaiters (FREE client or new client) or ctx cancelled.
+// Caller should retry Pick after wake. Used to queue HTTP requests when all workers are busy.
+func (r *Registry) WaitForPickCapacity(ctx context.Context) error {
+	r.pickWait.Lock()
+	defer r.pickWait.Unlock()
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		select {
+		case <-ctx.Done():
+			r.pickWait.Lock()
+			r.pickCond.Broadcast()
+			r.pickWait.Unlock()
+		case <-stop:
+		}
+	}()
+	r.pickCond.Wait()
+	return ctx.Err()
 }
 
 // IncrementTotal increments the total request counter for a client.

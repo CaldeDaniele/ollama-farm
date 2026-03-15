@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"sort"
 	"sync"
@@ -46,6 +47,25 @@ func (rt *Router) Pick(model string) (string, error) {
 	return candidates[idx].ID, nil
 }
 
+// PickWait blocks until a FREE client with the model exists (or ctx done). Same round-robin as Pick.
+func (rt *Router) PickWait(ctx context.Context, model string) (string, error) {
+	for {
+		id, err := rt.Pick(model)
+		if err == nil {
+			return id, nil
+		}
+		if err != ErrNoClientAvailable {
+			return "", err
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := rt.registry.WaitForPickCapacity(ctx); err != nil {
+			return "", err
+		}
+	}
+}
+
 // PickAny selects any FREE client (round-robin). Used for requests without a model (e.g. GET /api/tags).
 func (rt *Router) PickAny() (string, error) {
 	candidates := rt.registry.FreeAny()
@@ -60,4 +80,23 @@ func (rt *Router) PickAny() (string, error) {
 	rt.counters[""] = idx + 1
 	rt.mu.Unlock()
 	return candidates[idx].ID, nil
+}
+
+// PickAnyWait blocks until any FREE client exists (or ctx done).
+func (rt *Router) PickAnyWait(ctx context.Context) (string, error) {
+	for {
+		id, err := rt.PickAny()
+		if err == nil {
+			return id, nil
+		}
+		if err != ErrNoClientAvailable {
+			return "", err
+		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if err := rt.registry.WaitForPickCapacity(ctx); err != nil {
+			return "", err
+		}
+	}
 }

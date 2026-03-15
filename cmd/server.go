@@ -92,9 +92,13 @@ func runServer(cmd *cobra.Command, args []string) error {
 		if serverTLSCert != "" && serverTLSKey != "" {
 			scheme = "https"
 		}
+		base := scheme + "://" + host
 		fmt.Fprintf(os.Stderr, "ollama-farm server listening on :%d\n", serverPort)
 		fmt.Fprintf(os.Stderr, "token: %s\n", cfg.Token)
-		fmt.Fprintf(os.Stderr, "install + run client (one command):\n  curl -fsSL %s://%s/install.sh | sh -s -- --token %q\n", scheme, host, cfg.Token)
+		fmt.Fprintf(os.Stderr, "install + run client (one command per platform):\n")
+		fmt.Fprintf(os.Stderr, "  macOS:   curl -fsSL %s/install.sh | sh -s -- --token %q\n", base, cfg.Token)
+		fmt.Fprintf(os.Stderr, "  Linux:   curl -fsSL %s/install.sh | sh -s -- --token %q\n", base, cfg.Token)
+		fmt.Fprintf(os.Stderr, "  Windows: $env:OLLAMA_FARM_TOKEN='%s'; irm -useb %s/install.ps1 | iex\n", cfg.Token, base)
 		<-quit
 		_ = srv.Shutdown(context.Background())
 		return nil

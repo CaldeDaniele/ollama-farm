@@ -19,6 +19,14 @@ docker run -d -p 9000:9000 --name ollama-farm \
 
 Image on Docker Hub: **[danielecalderazzo/ollama-farm](https://hub.docker.com/r/danielecalderazzo/ollama-farm)**.
 
+**RunPod / cloud (amd64):** se vedi `exec /app/ollama-farm: exec format error`, l’immagine ha un binario per un’altra CPU (es. build su Mac ARM). Ricostruisci per **linux/amd64** e ripusha:
+
+```bash
+docker buildx build --platform linux/amd64 -t YOUR_IMAGE --push .
+```
+
+Il Dockerfile imposta di default `RUNTIME_ARCH=amd64` per il binario nel container.
+
 ---
 
 ## Table of contents
@@ -56,7 +64,7 @@ CALLER ──HTTP──▶ SERVER ──WebSocket (persistent)──▶ CLIENT(1
 
 1. The caller sends `POST /api/generate` (or another Ollama API) to the server.
 2. The server buffers the body (max 10 MB; 413 if larger), reads `model` from the JSON.
-3. The router selects a FREE client with that model (round-robin).
+3. The router selects a FREE client with that model (round-robin). If every client with that model is busy, the request **waits in queue** until one is free (same as “no client yet” until one connects).
 4. The server sends a `REQUEST` message (method, path, headers, body in base64) on the client’s WebSocket and marks the client BUSY.
 5. The client decodes the body, issues the request to local Ollama and sends each response chunk as a `CHUNK` message.
 6. The server forwards chunks to the HTTP caller (streaming).
